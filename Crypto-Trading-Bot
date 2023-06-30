@@ -1,0 +1,133 @@
+import ccxt
+import talib
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+
+# Börsen-API-Verbindung herstellen (in diesem Beispiel verwenden wir Binance)
+exchange = ccxt.binance({
+    'apiKey': 'DEINE_API_SCHLÜSSEL',
+    'secret': 'DEIN_API_GEHEIMNIS'
+})
+
+# Funktion zum Kauf einer Kryptowährung
+def kaufen(symbol, menge):
+    try:
+        order = exchange.create_market_buy_order(symbol, menge)
+        print("Kaufauftrag ausgeführt:")
+        print(order)
+        plt.scatter(len(schließungspreise) - 1, schließungspreise[-1], color='green', marker='^', label='Kauf')
+    except Exception as e:
+        print("Fehler beim Kauf:", str(e))
+
+# Funktion zum Verkaufen einer Kryptowährung
+def verkaufen(symbol, menge):
+    try:
+        order = exchange.create_market_sell_order(symbol, menge)
+        print("Verkaufsauftrag ausgeführt:")
+        print(order)
+        plt.scatter(len(schließungspreise) - 1, schließungspreise[-1], color='red', marker='v', label='Verkauf')
+    except Exception as e:
+        print("Fehler beim Verkauf:", str(e))
+
+# Funktion zum Ermitteln des aktuellen Preises einer Kryptowährung
+def aktuellen_preis(symbol):
+    try:
+        ticker = exchange.fetch_ticker(symbol)
+        preis = ticker['last']
+        return preis
+    except Exception as e:
+        print("Fehler beim Abrufen des Preises:", str(e))
+
+# Funktion zum Ermitteln der durchschnittlichen True Range (ATR)
+def durchschnittliche_true_range(symbol):
+    historische_daten = exchange.fetch_ohlcv(symbol, '1d', limit=200)
+    hoch = [datapunkt[2] for datapunkt in historische_daten]
+    niedrig = [datapunkt[3] for datapunkt in historische_daten]
+    schlusskurs_vortag = [datapunkt[4] for datapunkt in historische_daten[:-1]]
+    
+    tr = [np.max([hoch[i] - niedrig[i], np.abs(hoch[i] - schlusskurs_vortag[i]), np.abs(niedrig[i] - schlusskurs_vortag[i])]) for i in range(len(historische_daten)-1)]
+    atr = np.mean(tr)
+    return atr
+
+# Funktion zur Positionsgrößenanpassung basierend auf der Volatilität
+def positionsgröße_anpassen(symbol, kapital, risiko_prozent):
+    atr = durchschnittliche_true_range(symbol)
+    stop_loss_prozent = atr * risiko_prozent
+    aktueller_preis = aktuellen_preis(symbol)
+    positionsgröße = (kapital * risiko_prozent) / stop_loss_prozent
+    return positionsgröße
+
+# Funktion zum Feststellen von Kauf- und Verkaufssignalen und Erstellung des Charts
+def handelsstrategie(symbol, kapital, risiko_prozent):
+    # Historische Kursdaten abrufen
+    historische_daten = exchange.fetch_ohlcv(symbol, '1d', limit=200)
+    
+    # Kursdaten in separate Listen umwandeln
+    schließungspreise = [datapunkt[4] for datapunkt in historische_daten]
+    
+    # Indikatoren berechnen
+    rsi = talib.RSI(np.array(schließungspreise))
+    macd, _, _ = talib.MACD(np.array(schließungspreise))
+    upper, middle, lower = talib.BBANDS(np.array(schließungspreise))
+    ema = talib.EMA(np.array(schließungspreise))
+    
+    # Aktuelle Positionsgröße berechnen
+    positionsgröße = positionsgröße_anpassen(symbol, kapital, risiko_prozent)
+    
+    # Aktueller Preis abrufen
+    aktueller_preis = aktuellen_preis(symbol)
+    
+    # Swing-Trade-Strategie
+    if rsi[-1] > 70 and aktueller_preis > upper[-1] and aktueller_preis > schließungspreise[-2]:
+        stop_loss = np.min(schließungspreise[-3:-1])
+        kaufen(symbol, positionsgröße)
+        verkaufen_stop_loss(symbol, positionsgröße, stop_loss)
+    elif rsi[-1] < 30 and aktueller_preis < lower[-1] and aktueller_preis < schließungspreise[-2]:
+        stop_loss = np.max(schließungspreise[-3:-1])
+        kaufen(symbol, positionsgröße)
+        verkaufen_stop_loss(symbol, positionsgröße, stop_loss)
+    # Weitere Handelsstrategien hier hinzufügen
+    elif rsi[-1] > 50 and macd[-1] > 0 and aktueller_preis > ema[-1] and aktueller_preis > schließungspreise[-2]:
+        stop_loss = np.min(schließungspreise[-3:-1])
+        kaufen(symbol, positionsgröße)
+        verkaufen_stop_loss(symbol, positionsgröße, stop_loss)
+    elif rsi[-1] < 50 and macd[-1] < 0 and aktueller_preis < ema[-1] and aktueller_preis < schließungspreise[-2]:
+        stop_loss = np.max(schließungspreise[-3:-1])
+        kaufen(symbol, positionsgröße)
+        verkaufen_stop_loss(symbol, positionsgröße, stop_loss)
+
+# Funktion zum Verkaufen basierend auf einem Stop-Loss
+def verkaufen_stop_loss(symbol, menge, stop_loss):
+    aktueller_preis = aktuellen_preis(symbol)
+    if aktueller_preis <= stop_loss:
+        verkaufen(symbol, menge)
+    else:
+        stop_loss = aktueller_preis - (aktueller_preis - stop_loss)
+        # Trailing-Stop
+        while True:
+            aktueller_preis = aktuellen_preis(symbol)
+            if aktueller_preis <= stop_loss:
+                verkaufen(symbol, menge)
+                break
+            else:
+                stop_loss = aktueller_preis - (aktueller_preis - stop_loss)
+
+# Beispielverwendung
+symbol = 'BTC/USDT'
+kapital = 100  # Passen Sie das verfügbare Kapital an
+risiko_prozent = 0.02  # Passen hier Sie hier das prozentuale Risiko pro Trade
+
+handelsstrategie(symbol, kapital, risiko_prozent)
+
+# Historische Kursdaten abrufen
+historische_daten = exchange.fetch_ohlcv(symbol, '1d', limit=200)
+schließungspreise = [datapunkt[4] for datapunkt in historische_daten]
+
+# Chart erstellen
+plt.plot(schließungspreise, label='Schließungspreise')
+plt.legend(loc='upper left')
+plt.xlabel('Zeit')
+plt.ylabel('Preis')
+plt.title(symbol)
+plt.show()
